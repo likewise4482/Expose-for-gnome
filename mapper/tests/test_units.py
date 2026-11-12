@@ -58,8 +58,9 @@ class DevicesTest(unittest.TestCase):
         self.assertEqual(devices.parse_bitmap(bitmap(bits)), bits)
 
     def test_list_and_classify(self):
+        # Default list is mice and keyboards only (no macro pads / power buttons).
         devs = {d.name: d for d in devices.list_devices()}
-        self.assertEqual(set(devs), {'Logitech MX Vertical', 'Razer Naga Keyboard', 'Macro Pad'})
+        self.assertEqual(set(devs), {'Logitech MX Vertical', 'Razer Naga Keyboard'})
         mouse = devs['Logitech MX Vertical']
         self.assertEqual(mouse.kind, 'mouse')
         self.assertEqual(mouse.key, '046d:4082:Logitech MX Vertical')
@@ -69,11 +70,29 @@ class DevicesTest(unittest.TestCase):
         kbd = devs['Razer Naga Keyboard']
         self.assertEqual(kbd.kind, 'keyboard')
         self.assertEqual([codes.name(c) for c in kbd.extra_keys], ['KEY_F13', 'KEY_F14', 'KEY_F15'])
-        self.assertEqual(devs['Macro Pad'].kind, 'buttons')
         all_devs = {d.name: d for d in devices.list_devices(include_all=True)}
+        self.assertEqual(all_devs['Macro Pad'].kind, 'buttons')
         self.assertEqual(all_devs['SynPS/2 Touchpad'].kind, 'touchpad')
         self.assertTrue(all_devs['Gaming Mouse (expose-for-gnome)'].is_own)
         self.assertEqual(devices.by_path('/dev/input/event3').name, 'Logitech MX Vertical')
+
+    def test_merge_and_display_name(self):
+        root = self.tmp.name
+        # Second event node for the same mouse (dock / Bluetooth duplicate).
+        fake_input(root, 8, 'Logitech MX Vertical', 0x046d, 0x4082, MOUSE_BTNS, rel=[0, 1])
+        fake_input(root, 9, 'Logitech MX Vertical Advanced Ergonomic Mouse', 0x046d, 0xb020,
+                   MOUSE_BTNS, rel=[0, 1])
+        phys = devices.list_physical_devices()
+        by_name = {p.name: p for p in phys}
+        self.assertEqual(len(by_name['Logitech MX Vertical'].nodes), 2)
+        self.assertEqual(devices.display_name('Logitech MX Vertical Advanced Ergonomic Mouse'),
+                         'Logitech MX Vertical')
+        self.assertEqual(devices.display_name('MX Vertical Advanced Ergonomic Mouse'),
+                         'Logitech MX Vertical')
+        self.assertEqual(by_name['Logitech MX Vertical Advanced Ergonomic Mouse'].display,
+                         'Logitech MX Vertical')
+        self.assertTrue(by_name['Logitech MX Vertical Advanced Ergonomic Mouse'].matches_hidpp(
+            'MX Vertical Advanced Ergonomic Mouse'))
 
 
 class ConfigTest(unittest.TestCase):
@@ -113,6 +132,22 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(m.event_codes_for('b'), {codes.BTN_SIDE, codes.BTN_EXTRA})
         self.assertEqual(m.hidpp_bindings(), {'a': {0xFD: {'action': 'app-grid'}}})
 
+    def test_alias_lookup_across_reconnect(self):
+        # Same MX Vertical under a different product id (Bluetooth vs Unifying).
+        cfg = config.normalize({'devices': {
+            '046d:b020:Logitech MX Vertical Advanced Ergonomic Mouse': {
+                'name': 'Logitech MX Vertical Advanced Ergonomic Mouse',
+                'bindings': {'BTN_SIDE': {'action': 'mission-control'},
+                             'BTN_EXTRA': {'action': 'app-expose'}}},
+        }})
+        m = config.Mapping(cfg)
+        live = '046d:407b:MX Vertical'
+        self.assertEqual(m.lookup(live, 'BTN_SIDE')['action'], 'mission-control')
+        self.assertEqual(m.lookup(live, 'BTN_EXTRA')['action'], 'app-expose')
+        self.assertEqual(m.event_codes_for(live), {codes.BTN_SIDE, codes.BTN_EXTRA})
+        self.assertEqual(m.matching_keys(live),
+                         ['046d:b020:Logitech MX Vertical Advanced Ergonomic Mouse'])
+
 
 class CodesTest(unittest.TestCase):
     def test_names(self):
@@ -120,7 +155,8 @@ class CodesTest(unittest.TestCase):
         self.assertEqual(codes.code('KEY_F13'), 183)
         self.assertEqual(codes.name(0x2ff), 'EV_KEY:0x2ff')
         self.assertEqual(codes.code('EV_KEY:0x2ff'), 0x2ff)
-        self.assertEqual(codes.label('BTN_SIDE'), 'Back (thumb) button')
+        self.assertEqual(codes.label('BTN_SIDE'), 'Back')
+        self.assertEqual(codes.label('BTN_EXTRA'), 'Forward')
         self.assertEqual(codes.label('HIDPP:0x00fd'), 'DPI switch')
 
     def test_x11_mapping(self):

@@ -83,7 +83,7 @@ _PREFERRED = {BTN_LEFT: 'BTN_LEFT', BTN_MISC: 'BTN_0', BTN_JOYSTICK: 'BTN_TRIGGE
 
 _LABELS = {
     'BTN_LEFT': 'Left button', 'BTN_RIGHT': 'Right button', 'BTN_MIDDLE': 'Middle / wheel click',
-    'BTN_SIDE': 'Back (thumb) button', 'BTN_EXTRA': 'Forward (thumb) button',
+    'BTN_SIDE': 'Back', 'BTN_EXTRA': 'Forward',
     'BTN_FORWARD': 'Forward button', 'BTN_BACK': 'Back button', 'BTN_TASK': 'Task button',
 }
 

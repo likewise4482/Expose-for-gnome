@@ -1,5 +1,5 @@
-"""GTK4/libadwaita app: per-device button mappings, learn mode, Logitech
-controls and the first-run / permission setup."""
+"""GTK4/libadwaita app: a calm home screen to assign buttons, with device
+details one step away. Setup stays available from the menu."""
 import json
 import os
 import subprocess
@@ -16,8 +16,7 @@ from . import actions, codes, config, devices, ids, permissions  # noqa: E402
 ACTION_IDS = list(config.ACTIONS)
 BACKEND_IDS = list(config.BACKENDS)
 KIND_ICONS = {'mouse': 'input-mouse-symbolic', 'trackball': 'input-mouse-symbolic',
-              'keyboard': 'input-keyboard-symbolic', 'keys': 'input-keyboard-symbolic',
-              'buttons': 'input-gaming-symbolic', 'touchpad': 'input-touchpad-symbolic'}
+              'keyboard': 'input-keyboard-symbolic'}
 LEARN_TIMEOUT_MS = 15000
 
 
@@ -56,6 +55,15 @@ def shell_property(bus, prop):
         return res.unpack()[0]
     except GLib.Error:
         return None
+
+
+def action_label(binding):
+    action = (binding or {}).get('action', 'none')
+    if action == 'keys':
+        return binding.get('keys') or config.ACTIONS['keys']
+    if action == 'command':
+        return binding.get('command') or config.ACTIONS['command']
+    return config.ACTIONS.get(action, action)
 
 
 class Daemon:
@@ -152,56 +160,47 @@ class BindingEditor:
 
 class MainWindow(Adw.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title=ids.PRODUCT_NAME, default_width=640,
-                         default_height=780)
+        super().__init__(application=app, title=ids.PRODUCT_NAME, default_width=520,
+                         default_height=680)
         self.set_icon_name(ids.APP_ID)
         self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         self.daemon = Daemon(self.bus)
         self.first_run = not config.CONFIG_PATH.exists()
         self.cfg = config.load()
-        self.pending = set()        # (dkey, bkey) rows added in the UI but not yet bound
-        self.expanded = set()
         self.hidpp = None
         self.hidpp_error = None
         self._loading = False
+        self._device_page = None
 
         self.toast = Adw.ToastOverlay()
-        self.stack = Adw.ViewStack()
-        switcher = Adw.ViewSwitcher(stack=self.stack, policy=Adw.ViewSwitcherPolicy.WIDE)
-        header = Adw.HeaderBar(title_widget=switcher)
-        learn = Gtk.Button(icon_name='list-add-symbolic',
-                           tooltip_text='Press to assign: map the next button or key you press')
-        learn.connect('clicked', lambda *_: self.start_learn())
-        header.pack_start(learn)
-        about = Gtk.Button(icon_name='help-about-symbolic', tooltip_text='About')
-        about.connect('clicked', self._on_about)
-        header.pack_end(about)
-
+        self.nav = Adw.NavigationView()
         self.banner = Adw.Banner(button_label='Set up')
-        self.banner.connect('button-clicked', lambda *_: self.stack.set_visible_child_name('setup'))
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        box.append(self.banner)
-        box.append(self.stack)
-        self.stack.set_vexpand(True)
-        self.toast.set_child(box)
+        self.banner.connect('button-clicked', lambda *_: self.open_setup())
+
+        shell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        shell.append(self.banner)
+        shell.append(self.nav)
+        self.nav.set_vexpand(True)
+        self.toast.set_child(shell)
+
         toolbar = Adw.ToolbarView()
-        toolbar.add_top_bar(header)
         toolbar.set_content(self.toast)
         self.set_content(toolbar)
 
-        self.buttons_page = Adw.PreferencesPage()
-        self.stack.add_titled_with_icon(self.buttons_page, 'buttons', 'Buttons',
-                                        'input-mouse-symbolic')
-        self.setup_page = self._build_setup_page()
-        self.stack.add_titled_with_icon(self.setup_page, 'setup', 'Setup',
-                                        'emblem-system-symbolic')
+        self.home_page = Adw.NavigationPage(title=ids.PRODUCT_NAME, tag='home')
+        self.home_page.set_child(self._build_home())
+        self.nav.add(self.home_page)
+
+        self.setup_page = Adw.NavigationPage(title='Setup', tag='setup')
+        self.setup_page.set_child(self._build_setup_page())
 
         self.ensure_daemon()
-        self.rebuild_buttons()
+        self.refresh_home()
         self.refresh_status()
         self.load_hidpp()
-        if self.first_run or permissions.check()['needs_setup']:
-            self.stack.set_visible_child_name('setup')
+        if permissions.check()['needs_setup']:
+            self.banner.set_title('Mouse buttons need a one-time setup on Wayland')
+            self.banner.set_revealed(True)
         GLib.timeout_add_seconds(3, self.refresh_status)
 
     # --- persistence ---------------------------------------------------------
@@ -211,6 +210,10 @@ class MainWindow(Adw.ApplicationWindow):
         config.save(self.cfg)
         self.first_run = False
         self.toast.add_toast(Adw.Toast(title='Saved', timeout=1))
+        self.refresh_home()
+        if self._device_page and self.nav.find_page('device'):
+            # Rebuild detail so editors stay in sync after a save from home/learn.
+            pass
 
     def ensure_daemon(self):
         if self.daemon.running:
@@ -219,163 +222,297 @@ class MainWindow(Adw.ApplicationWindow):
         if code:
             self.toast.add_toast(Adw.Toast(title=f'Could not start the mapper: {out}'))
 
-    # --- Buttons page -------------------------------------------------------------
-    def rebuild_buttons(self):
-        page = self.buttons_page
-        for group in getattr(self, '_groups', []):
-            page.remove(group)
-        self._groups = []
+    # --- home ----------------------------------------------------------------
+    def _build_home(self):
+        toolbar = Adw.ToolbarView()
+        header = Adw.HeaderBar()
+        menu_btn = Gtk.MenuButton(icon_name='open-menu-symbolic', tooltip_text='Menu')
+        menu = Gio.Menu()
+        menu.append('Setup', 'win.setup')
+        menu.append('About', 'win.about')
+        menu_btn.set_menu_model(menu)
+        header.pack_end(menu_btn)
+        toolbar.add_top_bar(header)
 
-        def add_group(group):
-            page.add(group)
-            self._groups.append(group)
+        self.home_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+        self.home_box.set_margin_top(18)
+        self.home_box.set_margin_bottom(24)
+        self.home_box.set_margin_start(18)
+        self.home_box.set_margin_end(18)
+        scroll = Gtk.ScrolledWindow(vexpand=True)
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_child(Adw.Clamp(child=self.home_box, maximum_size=520))
+        toolbar.set_content(scroll)
 
-        if self.first_run:
-            welcome = Adw.PreferencesGroup(
-                title=f'Welcome to {ids.PRODUCT_NAME}',
-                description='Map mouse buttons, extra keys and Logitech firmware buttons to '
-                            'App Exposé, the overview and more. Use + (top left) and press a '
-                            'button to assign it, or start with the suggestion below.')
-            row = Adw.ActionRow(title='Suggested mapping',
-                                subtitle='Back thumb button → App Exposé, '
-                                         'forward thumb button → Activities overview')
-            use = Gtk.Button(label='Use', valign=Gtk.Align.CENTER)
-            use.add_css_class('suggested-action')
-            use.connect('clicked', self._on_use_suggested)
-            row.add_suffix(use)
-            welcome.add(row)
-            add_group(welcome)
+        app = self.get_application()
+        if app:
+            app.create_action = getattr(app, 'create_action', None)
+        self._install_actions()
+        return toolbar
 
-        any_group = Adw.PreferencesGroup(
-            title='Any device',
-            description='Applies to every mouse/keyboard unless a device below has its own '
-                        'mapping for the same button.')
-        self._fill_bindings(any_group, config.ANY, 'Any device', set())
-        add_group(any_group)
+    def _install_actions(self):
+        setup = Gio.SimpleAction.new('setup', None)
+        setup.connect('activate', lambda *_: self.open_setup())
+        self.add_action(setup)
+        about = Gio.SimpleAction.new('about', None)
+        about.connect('activate', self._on_about)
+        self.add_action(about)
 
-        devs = devices.list_devices()
-        dev_group = Adw.PreferencesGroup(
-            title='Devices',
-            description='Mappings that apply to one device only. Buttons listed are what the '
-                        'device advertises; use + and press the button if unsure which is which.')
-        if not devs:
-            dev_group.add(Adw.ActionRow(title='No input devices found',
-                                        subtitle='/sys/class/input has no mice or keyboards'))
-        for dev in devs:
-            dev_group.add(self._device_row(dev))
-        add_group(dev_group)
+    def refresh_home(self):
+        while child := self.home_box.get_first_child():
+            self.home_box.remove(child)
 
-        add_group(self._hidpp_group())
+        hero = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
+                       halign=Gtk.Align.CENTER)
+        hero.set_margin_top(12)
+        hero.set_margin_bottom(6)
+        title = Gtk.Label(label='Press a button to assign', wrap=True, justify=Gtk.Justification.CENTER)
+        title.add_css_class('title-1')
+        subtitle = Gtk.Label(
+            label='Click the button below, then press a mouse button or key.',
+            wrap=True, justify=Gtk.Justification.CENTER)
+        subtitle.add_css_class('dim-label')
+        assign = Gtk.Button(label='Press a button…', halign=Gtk.Align.CENTER)
+        assign.add_css_class('pill')
+        assign.add_css_class('suggested-action')
+        assign.set_size_request(220, 0)
+        assign.connect('clicked', lambda *_: self.start_learn())
+        hero.append(title)
+        hero.append(subtitle)
+        hero.append(assign)
+        self.home_box.append(hero)
 
-    def _fill_bindings(self, container, dkey, dname, advertised):
-        bindings = self.cfg['devices'].get(dkey, {}).get('bindings', {})
-        keys = [k for k in bindings if codes.hidpp_cid(k) is None]
-        keys += [b for d, b in sorted(self.pending) if d == dkey and b not in keys]
-        add = container.add_row if isinstance(container, Adw.ExpanderRow) else container.add
-        for bkey in keys:
-            ed = BindingEditor(self, dkey, dname, bkey, codes.label(bkey), bkey)
+        mapped = self._mapped_entries()
+        mapped_group = Adw.PreferencesGroup(title='Mapped buttons' if mapped else '')
+        if mapped:
+            for entry in mapped:
+                row = Adw.ActionRow(title=entry['title'], subtitle=entry['subtitle'])
+                row.set_activatable(True)
+                row.add_suffix(Gtk.Image(icon_name='go-next-symbolic'))
+                row.connect('activated', self._on_open_mapped, entry)
+                mapped_group.add(row)
+        else:
+            empty = Adw.ActionRow(
+                title='Nothing mapped yet',
+                subtitle='Your Back, Forward and DPI buttons will show up here.')
+            mapped_group.add(empty)
+        self.home_box.append(mapped_group)
+
+        phys = devices.list_physical_devices()
+        devices_group = Adw.PreferencesGroup(
+            title='Your devices',
+            description='Mice and keyboards only. Open one to change its buttons.')
+        if not phys:
+            devices_group.add(Adw.ActionRow(title='No mice or keyboards found'))
+        for dev in phys:
+            n = self._mapped_count(dev)
+            row = Adw.ActionRow(title=dev.display,
+                                subtitle=f'{n} mapped' if n else dev.bus_name or dev.kind)
+            row.add_prefix(Gtk.Image(icon_name=KIND_ICONS.get(dev.kind, 'input-mouse-symbolic')))
+            row.add_suffix(Gtk.Image(icon_name='go-next-symbolic'))
+            row.set_activatable(True)
+            row.connect('activated', lambda _r, d=dev: self.open_device(d))
+            devices_group.add(row)
+        self.home_box.append(devices_group)
+
+    def _mapped_entries(self):
+        """Short list of active bindings for the home screen."""
+        phys = {p.key: p for p in devices.list_physical_devices()}
+        entries = []
+        for dkey, dev in self.cfg.get('devices', {}).items():
+            if dkey == config.ANY:
+                dname = 'Any device'
+                display = dname
+            else:
+                dname = dev.get('name') or dkey
+                display = devices.display_name(dname)
+                # Prefer the live physical card's display name when known.
+                for p in phys.values():
+                    if p.key == dkey or dkey in config.Mapping(self.cfg).matching_keys(p.key):
+                        display = p.display
+                        break
+                else:
+                    if dkey.startswith('046d:hidpp:'):
+                        display = devices.display_name(dname)
+            for bkey, binding in (dev.get('bindings') or {}).items():
+                if binding.get('action', 'none') == 'none':
+                    continue
+                entries.append({
+                    'dkey': dkey, 'dname': dname, 'bkey': bkey,
+                    'title': f'{codes.label(bkey)}  ·  {action_label(binding)}',
+                    'subtitle': display,
+                    'hidpp': codes.hidpp_cid(bkey) is not None,
+                })
+        order = {'BTN_SIDE': 0, 'BTN_EXTRA': 1, 'HIDPP:0x00fd': 2}
+        entries.sort(key=lambda e: (order.get(e['bkey'], 50), e['title']))
+        return entries
+
+    def _mapped_count(self, phys):
+        mapping = config.Mapping(self.cfg)
+        keys = set()
+        for k in mapping.matching_keys(phys.key):
+            keys |= {b for b, bind in mapping.per_device.get(k, {}).items()
+                     if codes.hidpp_cid(b) is None}
+        # Count HID++ bindings that belong to this mouse.
+        for dkey, bindings in mapping.per_device.items():
+            if not dkey.startswith('046d:hidpp:'):
+                continue
+            hid_name = dkey.split(':', 2)[-1]
+            if phys.matches_hidpp(hid_name):
+                keys |= set(bindings)
+        return len(keys)
+
+    def _on_open_mapped(self, _row, entry):
+        if entry['hidpp']:
+            for phys in devices.list_physical_devices():
+                if phys.matches_hidpp(entry['dname']) or phys.matches_hidpp(
+                        entry['dkey'].split(':', 2)[-1]):
+                    self.open_device(phys)
+                    return
+        for phys in devices.list_physical_devices():
+            if phys.key == entry['dkey'] or entry['dkey'] in config.Mapping(self.cfg).matching_keys(
+                    phys.key):
+                self.open_device(phys)
+                return
+        self.toast.add_toast(Adw.Toast(title='That device is not connected'))
+
+    # --- device detail -------------------------------------------------------
+    def open_device(self, phys):
+        page = Adw.NavigationPage(title=phys.display, tag='device')
+        page.set_child(self._build_device_page(phys))
+        # Replace any previous device page so Back always returns home.
+        if self.nav.find_page('device'):
+            self.nav.pop_to_tag('home')
+        self.nav.push(page)
+        self._device_page = page
+
+    def _build_device_page(self, phys):
+        toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(Adw.HeaderBar())
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+        box.set_margin_top(12)
+        box.set_margin_bottom(24)
+        box.set_margin_start(18)
+        box.set_margin_end(18)
+
+        intro = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        kind = {'mouse': 'Mouse', 'trackball': 'Trackball', 'keyboard': 'Keyboard'}.get(
+            phys.kind, phys.kind.title())
+        heading = Gtk.Label(label=phys.display, xalign=0)
+        heading.add_css_class('title-2')
+        blurb = Gtk.Label(label=f'{kind} · {phys.bus_name}' if phys.bus_name else kind, xalign=0)
+        blurb.add_css_class('dim-label')
+        intro.append(heading)
+        intro.append(blurb)
+        box.append(intro)
+
+        assign = Gtk.Button(label='Press a button on this device…')
+        assign.add_css_class('pill')
+        assign.connect('clicked', lambda *_: self.start_learn())
+        box.append(assign)
+
+        bindings_group = Adw.PreferencesGroup(title='Buttons')
+        mapping = config.Mapping(self.cfg)
+        bound_keys = []
+        for k in mapping.matching_keys(phys.key):
+            for bkey, binding in mapping.per_device.get(k, {}).items():
+                if codes.hidpp_cid(bkey) is None:
+                    bound_keys.append((k, phys.name if k == phys.key else
+                                       self.cfg['devices'].get(k, {}).get('name', phys.name),
+                                       bkey))
+        # Prefer the live physical key for new edits when we have a match.
+        edit_key = phys.key
+        edit_name = phys.name
+        if bound_keys:
+            # Keep saving to the existing config key so we don't fork duplicates.
+            edit_key, edit_name, _ = bound_keys[0]
+            edit_name = self.cfg['devices'].get(edit_key, {}).get('name', edit_name)
+        seen = set()
+        for dkey, dname, bkey in bound_keys:
+            if bkey in seen:
+                continue
+            seen.add(bkey)
+            ed = BindingEditor(self, dkey, dname, bkey, codes.label(bkey))
             for row in ed.rows():
-                add(row)
-        choices = sorted({codes.name(c) for c in advertised} - set(keys),
-                         key=lambda k: codes.code(k) or 0)
-        if dkey == config.ANY:
-            choices = [k for k in ('BTN_SIDE', 'BTN_EXTRA', 'BTN_MIDDLE', 'BTN_FORWARD',
-                                   'BTN_BACK', 'BTN_TASK') if k not in keys]
-        if choices:
+                bindings_group.add(row)
+        extras = phys.mouse_buttons if phys.kind in ('mouse', 'trackball') else phys.extra_keys
+        choices = [codes.name(c) for c in extras
+                   if codes.name(c) not in seen and codes.name(c) not in
+                   ('BTN_LEFT', 'BTN_RIGHT')]
+        # Prefer the familiar thumb buttons first.
+        preferred = [k for k in ('BTN_SIDE', 'BTN_EXTRA', 'BTN_MIDDLE', 'BTN_FORWARD',
+                                 'BTN_BACK', 'BTN_TASK') if k in choices]
+        others = [k for k in choices if k not in preferred]
+        add_choices = preferred + others
+        if add_choices:
             picker = Adw.ComboRow(title='Add a button',
-                                  model=string_list(['Choose…'] + [
-                                      f'{codes.label(k)} ({k})' for k in choices]))
+                                  model=string_list(['Choose…'] +
+                                                    [codes.label(k) for k in add_choices]))
 
             def on_pick(row, *_):
                 i = row.get_selected()
-                if i > 0:
-                    self.pending.add((dkey, choices[i - 1]))
-                    self.expanded.add(dkey)
-                    GLib.idle_add(lambda: self.rebuild_buttons() and False)
+                if i <= 0:
+                    return
+                bkey = add_choices[i - 1]
+                config.set_binding(self.cfg, edit_key, edit_name, bkey,
+                                   {'action': 'app-expose'})
+                self.save()
+                self.open_device(phys)
             picker.connect('notify::selected', on_pick)
-            add(picker)
+            bindings_group.add(picker)
+        if not bound_keys and not add_choices:
+            bindings_group.add(Adw.ActionRow(
+                title='No extra buttons advertised',
+                subtitle='Use “Press a button…” if this device sends a special key.'))
+        box.append(bindings_group)
 
-    def _device_row(self, dev):
-        bound = self.cfg['devices'].get(dev.key, {}).get('bindings', {})
-        n = len([k for k in bound if codes.hidpp_cid(k) is None])
-        extras = dev.mouse_buttons if dev.kind in ('mouse', 'trackball') else dev.extra_keys
-        details = [dev.kind, dev.bus_name, f'{dev.vendor:04x}:{dev.product:04x}']
-        if n:
-            details.append(f'{n} mapped')
-        row = Adw.ExpanderRow(title=GLib.markup_escape_text(dev.name), subtitle=' · '.join(details))
-        row.add_prefix(Gtk.Image(icon_name=KIND_ICONS.get(dev.kind, 'input-gaming-symbolic')))
-        row.set_expanded(dev.key in self.expanded)
-        row.connect('notify::expanded', lambda r, *_: (self.expanded.add if r.get_expanded()
-                                                        else self.expanded.discard)(dev.key))
-        if extras:
-            shown = ', '.join(codes.name(c) for c in extras[:24])
-            more = f' and {len(extras) - 24} more' if len(extras) > 24 else ''
-            info = Adw.ActionRow(title='Advertised buttons' if dev.kind in ('mouse', 'trackball')
-                                 else 'Extra keys', subtitle=shown + more)
-        else:
-            info = Adw.ActionRow(title='Advertised buttons', subtitle='only standard keys/buttons')
-        info.set_subtitle_selectable(True)
-        row.add_row(info)
-        self._fill_bindings(row, dev.key, dev.name, extras)
-        learn = Adw.ActionRow(title='Press to assign',
-                              subtitle='Map whatever this device sends next (button or key)')
-        b = Gtk.Button(label='Press…', valign=Gtk.Align.CENTER)
-        b.connect('clicked', lambda *_: self.start_learn())
-        learn.add_suffix(b)
-        row.add_row(learn)
-        return row
-
-    def _hidpp_group(self):
-        group = Adw.PreferencesGroup(
-            title='Logitech firmware controls (HID++)',
-            description='Buttons handled inside the device (DPI switch, gesture button, …) send '
-                        'nothing to the computer. Assigning an action diverts the control to '
-                        f'{ids.PRODUCT_NAME}; "Default" gives it back to the firmware.')
-        refresh = Gtk.Button(icon_name='view-refresh-symbolic', valign=Gtk.Align.CENTER,
-                             tooltip_text='Scan again')
-        refresh.add_css_class('flat')
-        refresh.connect('clicked', lambda *_: self.load_hidpp())
-        group.set_header_suffix(refresh)
-        if self.hidpp is None:
-            group.add(Adw.ActionRow(title='Scanning…' if self.daemon.running else
-                                    'Mapper not running', subtitle=self.hidpp_error or ''))
-            return group
-        for err in self.hidpp.get('errors', []):
-            row = Adw.ActionRow(title=err.get('name') or err.get('path', 'Logitech device'),
-                                subtitle=err.get('error', ''))
-            if err.get('permission'):
-                row.set_subtitle('No access to the device. Run the one-time setup.')
-                b = Gtk.Button(label='Set up', valign=Gtk.Align.CENTER)
-                b.connect('clicked', lambda *_: self.run_setup(evdev=False, hidraw=True))
-                row.add_suffix(b)
-            group.add(row)
-        devs = self.hidpp.get('devices', [])
-        if not devs and not self.hidpp.get('errors'):
-            group.add(Adw.ActionRow(title='No Logitech HID++ devices found'))
-        for d in devs:
-            exp = Adw.ExpanderRow(title=GLib.markup_escape_text(d['name']),
-                                  subtitle=f'{d["path"]} · device index {d["index"]:#x} · '
-                                           f'{len(d["controls"])} controls')
-            exp.add_prefix(Gtk.Image(icon_name='input-mouse-symbolic'))
-            exp.set_expanded(d['key'] in self.expanded)
-            exp.connect('notify::expanded', lambda r, *_, k=d['key']: (
-                self.expanded.add if r.get_expanded() else self.expanded.discard)(k))
-            for c in d['controls']:
-                key = codes.hidpp_key(c['cid'])
-                flags = []
-                if not c['divertable']:
-                    flags.append('fixed')
-                if c['os_visible']:
-                    flags.append('also a normal button')
-                subtitle = f'{c["cid"]:#06x}' + (f' ({", ".join(flags)})' if flags else '')
-                if not c['divertable']:
-                    exp.add_row(Adw.ActionRow(title=c['name'], subtitle=subtitle))
+        hid = self._hidpp_for(phys)
+        if hid:
+            more = Adw.PreferencesGroup(title='More buttons on this mouse…')
+            exp = Adw.ExpanderRow(title='Logitech firmware controls',
+                                  subtitle='DPI switch and similar buttons handled inside the mouse')
+            exp.set_expanded(any(
+                codes.hidpp_key(c['cid']) in self.cfg.get('devices', {}).get(hid['key'], {})
+                .get('bindings', {}) for c in hid.get('controls', [])))
+            has_rows = False
+            for c in hid.get('controls', []):
+                if not c.get('divertable') or c.get('os_visible'):
                     continue
-                ed = BindingEditor(self, d['key'], d['name'], key, c['name'], subtitle)
-                for r in ed.rows():
-                    exp.add_row(r)
-            group.add(exp)
-        return group
+                has_rows = True
+                key = codes.hidpp_key(c['cid'])
+                ed = BindingEditor(self, hid['key'], hid['name'], key, c['name'])
+                for row in ed.rows():
+                    exp.add_row(row)
+            if has_rows:
+                more.add(exp)
+                box.append(more)
+
+        advanced = Adw.PreferencesGroup()
+        adv = Adw.ExpanderRow(title='Advanced', subtitle='Technical identifiers')
+        adv.add_row(Adw.ActionRow(title='Device id', subtitle=phys.key))
+        adv.add_row(Adw.ActionRow(title='Identity', subtitle=phys.identity))
+        if phys.uniq:
+            adv.add_row(Adw.ActionRow(title='Unique id', subtitle=phys.uniq))
+        paths = ', '.join(n.path for n in phys.nodes)
+        adv.add_row(Adw.ActionRow(title='Event nodes', subtitle=paths))
+        if hid:
+            adv.add_row(Adw.ActionRow(title='HID++', subtitle=f'{hid["path"]} · {hid["key"]}'))
+        advanced.add(adv)
+        box.append(advanced)
+
+        scroll = Gtk.ScrolledWindow(vexpand=True)
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_child(Adw.Clamp(child=box, maximum_size=520))
+        toolbar.set_content(scroll)
+        return toolbar
+
+    def _hidpp_for(self, phys):
+        if not self.hidpp or phys.kind not in ('mouse', 'trackball'):
+            return None
+        for d in self.hidpp.get('devices', []):
+            if phys.matches_hidpp(d.get('name', '')):
+                return d
+        return None
 
     def load_hidpp(self):
         if not self.daemon.running:
@@ -384,14 +521,8 @@ class MainWindow(Adw.ApplicationWindow):
 
         def done(payload, err):
             self.hidpp = payload if payload else {'devices': [], 'errors': [{'error': err}]}
-            self.rebuild_buttons()
+            self.refresh_home()
         self.daemon.call('ListHidppDevices', None, done, timeout=30000)
-
-    def _on_use_suggested(self, *_):
-        for bkey, b in config.SUGGESTED.items():
-            config.set_binding(self.cfg, config.ANY, 'Any device', bkey, dict(b))
-        self.save()
-        self.rebuild_buttons()
 
     # --- learn mode -------------------------------------------------------------
     def start_learn(self):
@@ -400,8 +531,7 @@ class MainWindow(Adw.ApplicationWindow):
             return
         dialog = message_dialog(self, 'Press a button',
                                 'Press the mouse button or key you want to assign.\n'
-                                'Logitech firmware buttons are detected too when access '
-                                'is set up. Esc cancels.')
+                                'Esc cancels.')
         dialog.add_response('cancel', 'Cancel')
         dialog.connect('response', lambda *_: self.daemon.call('CancelLearn'))
 
@@ -411,8 +541,10 @@ class MainWindow(Adw.ApplicationWindow):
                 self.toast.add_toast(Adw.Toast(title=f'Learn failed: {err}'))
             elif result.get('timeout'):
                 self.toast.add_toast(Adw.Toast(
-                    title='Nothing detected. On Wayland the one-time setup is needed; '
-                          'firmware buttons need Logitech access.', timeout=6))
+                    title='Nothing detected. On Wayland the one-time setup is needed.',
+                    timeout=6))
+            elif result.get('cancelled'):
+                return
             elif result.get('binding_key'):
                 self.assign_dialog(result)
         self.daemon.call('Learn', GLib.Variant('(u)', (LEARN_TIMEOUT_MS,)), done,
@@ -422,14 +554,22 @@ class MainWindow(Adw.ApplicationWindow):
     def assign_dialog(self, result):
         bkey, dkey, dname = result['binding_key'], result['device_key'], result['device_name']
         hid = codes.hidpp_cid(bkey) is not None
+        # Prefer an existing config key for this physical device so reconnects
+        # do not fork a second copy of the mappings.
+        mapping = config.Mapping(self.cfg)
+        aliases = mapping.matching_keys(dkey)
+        if aliases:
+            dkey = aliases[0]
+            dname = self.cfg['devices'].get(dkey, {}).get('name', dname)
         dialog = message_dialog(self, f'Assign {result["label"]}',
-                                f'Detected {bkey} from “{dname}”.')
+                                f'Detected on “{devices.display_name(dname)}”.')
         box = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         box.add_css_class('boxed-list')
         scopes = [(dkey, dname)] + ([] if hid else [(config.ANY, 'Any device')])
         scope = Adw.ComboRow(title='Applies to',
-                             model=string_list([f'This device ({n})' if k != config.ANY else n
-                                                for k, n in scopes]))
+                             model=string_list([
+                                 devices.display_name(n) if k != config.ANY else n
+                                 for k, n in scopes]))
         act_ids = [a for a in ACTION_IDS if a != 'none']
         action = Adw.ComboRow(title='Action',
                               model=string_list([config.ACTIONS[a] for a in act_ids]))
@@ -452,20 +592,31 @@ class MainWindow(Adw.ApplicationWindow):
             if binding['action'] == 'command':
                 binding['command'] = cmd.get_text().strip()
             config.set_binding(self.cfg, k, n, bkey, binding)
-            self.expanded.add(k)
             self.save()
-            self.rebuild_buttons()
+            for phys in devices.list_physical_devices():
+                if phys.key == k or k in config.Mapping(self.cfg).matching_keys(phys.key) or \
+                        (hid and phys.matches_hidpp(n)):
+                    self.open_device(phys)
+                    break
         dialog.connect('response', on_response)
         dialog.present_()
 
     # --- Setup page ---------------------------------------------------------------
+    def open_setup(self):
+        if not self.nav.find_page('setup'):
+            self.nav.push(self.setup_page)
+        else:
+            self.nav.push_by_tag('setup') if hasattr(self.nav, 'push_by_tag') else \
+                self.nav.push(self.setup_page)
+
     def _build_setup_page(self):
+        toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(Adw.HeaderBar())
         page = Adw.PreferencesPage()
         intro = Adw.PreferencesGroup(
             title='Setup',
-            description='App Exposé itself is a GNOME Shell extension. Mouse buttons are handled '
-                        'by a small background service. On X11 it needs no extra permissions; '
-                        'on Wayland it needs a one-time setup (administrator password).')
+            description='App Exposé is a GNOME Shell extension. Mouse buttons are handled by a '
+                        'small background service. On X11 it needs no extra permissions.')
         page.add(intro)
 
         self.session_row = Adw.ActionRow(title='Session')
@@ -488,7 +639,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.input_btn.connect('clicked', lambda *_: self.run_setup(evdev=True, hidraw=True))
         self.input_row.add_suffix(self.input_btn)
         perms.add(self.input_row)
-        self.hid_row = Adw.ActionRow(title='Logitech devices (HID++)',
+        self.hid_row = Adw.ActionRow(title='Logitech devices',
                                      subtitle='Needed for firmware buttons such as a DPI switch')
         self.hid_btn = Gtk.Button(label='Set up', valign=Gtk.Align.CENTER)
         self.hid_btn.connect('clicked', lambda *_: self.run_setup(evdev=False, hidraw=True))
@@ -496,11 +647,8 @@ class MainWindow(Adw.ApplicationWindow):
         perms.add(self.hid_row)
         explain = Adw.ActionRow(
             title='What the setup does',
-            subtitle='Installs udev rules that let the user of the active local session read '
-                     'input devices and create virtual ones (/dev/uinput), and talk to Logitech '
-                     'devices. Effective immediately, no logout. Programs you run can then '
-                     'read keyboard and mouse input; access ends when you log out or switch '
-                     'user.')
+            subtitle='Installs udev rules so the active session can read input devices and talk '
+                     'to Logitech firmware. No logout needed.')
         explain.set_subtitle_lines(0)
         remove = Gtk.Button(label='Remove', valign=Gtk.Align.CENTER)
         remove.connect('clicked', lambda *_: self.run_setup(remove=True))
@@ -515,8 +663,7 @@ class MainWindow(Adw.ApplicationWindow):
         restart.connect('clicked', self._on_restart)
         self.status_row.add_suffix(restart)
         svc.add(self.status_row)
-        self.autostart = Adw.SwitchRow(title='Run at login',
-                                       subtitle=f'systemd user service {ids.SYSTEMD_UNIT}')
+        self.autostart = Adw.SwitchRow(title='Run at login')
         self.autostart.connect('notify::active', self._on_autostart)
         svc.add(self.autostart)
         self.backend_row = Adw.ComboRow(title='Backend',
@@ -532,7 +679,8 @@ class MainWindow(Adw.ApplicationWindow):
             test.add_suffix(b)
         svc.add(test)
         page.add(svc)
-        return page
+        toolbar.set_content(page)
+        return toolbar
 
     def run_setup(self, evdev=True, hidraw=True, remove=False):
         try:
@@ -583,8 +731,7 @@ class MainWindow(Adw.ApplicationWindow):
             self.ext_row.set_subtitle('enabled but not loaded yet: log out and back in '
                                       '(on X11 you can also press Alt+F2, type r, Enter)')
         elif state == 'missing':
-            self.ext_row.set_subtitle('not installed: run install.sh or get it from '
-                                      'extensions.gnome.org')
+            self.ext_row.set_subtitle('not installed: run install.sh')
         else:
             self.ext_row.set_subtitle('installed but disabled')
         self.ext_enable.set_visible(state == 'disabled')
@@ -605,9 +752,12 @@ class MainWindow(Adw.ApplicationWindow):
         if not hid['nodes']:
             self.hid_row.set_subtitle('No Logitech device connected')
         elif hid['accessible'] == hid['nodes']:
-            self.hid_row.set_subtitle('OK: ' + ', '.join(hid['names']))
+            names = [devices.display_name(n) for n in hid['names']
+                     if 'cam' not in n.lower() and 'stream' not in n.lower()]
+            self.hid_row.set_subtitle('OK' + (': ' + ', '.join(names) if names else ''))
         else:
-            self.hid_row.set_subtitle('No access to ' + ', '.join(hid['names']))
+            self.hid_row.set_subtitle('No access to ' + ', '.join(
+                devices.display_name(n) for n in hid['names']))
         self.hid_btn.set_visible(hid['accessible'] < hid['nodes'])
 
         if perm['evdev_needed'] and missing:
@@ -631,7 +781,8 @@ class MainWindow(Adw.ApplicationWindow):
                     return
                 text = f'{active}, {st["backend"]} backend'
                 if st.get('grabbed'):
-                    text += ' · handling ' + ', '.join(st['grabbed'])
+                    text += ' · handling ' + ', '.join(
+                        devices.display_name(n) for n in st['grabbed'])
                 if st.get('problem'):
                     text += f'\n⚠ {st["problem"]}'
                 for w in st.get('warnings', []):
@@ -695,7 +846,7 @@ class MainWindow(Adw.ApplicationWindow):
             return False
         GLib.timeout_add(1500, fire)
 
-    def _on_about(self, *_):
+    def _on_about(self, *_args):
         kwargs = dict(application_name=ids.PRODUCT_NAME, application_icon=ids.APP_ID,
                       version=ids.VERSION, website=ids.HOMEPAGE,
                       issue_url=f'{ids.HOMEPAGE}/issues', license_type=Gtk.License.GPL_2_0,

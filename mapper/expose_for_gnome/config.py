@@ -19,6 +19,7 @@ every device unless that device has its own binding for the same button.
 import copy
 import json
 import os
+import re
 from pathlib import Path
 
 from . import codes, ids
@@ -133,6 +134,19 @@ def _active(bindings):
     return {k: b for k, b in bindings.items() if b.get('action', 'none') != 'none'}
 
 
+def _split_key(dkey):
+    parts = dkey.split(':', 2)
+    return parts if len(parts) == 3 else None
+
+
+def _name_tokens(name):
+    return {t for t in re.findall(r'[a-z0-9]+', name.lower()) if len(t) > 1}
+
+
+# Distinctive model tokens: Bluetooth vs Unifying can change product id / name suffix.
+_MODEL_TOKENS = {'vertical', 'master', 'anywhere', 'lift', 'ergo', 'pebble', 'pop'}
+
+
 class Mapping:
     """Resolved view of a config used by the backends."""
 
@@ -142,19 +156,51 @@ class Mapping:
         self.per_device = {k: _active(d.get('bindings', {}))
                            for k, d in cfg['devices'].items() if k != ANY}
 
+    def matching_keys(self, dkey):
+        """Config device keys that should apply to a live device key.
+
+        Exact match first; then same vendor:product; then same vendor with a
+        shared model token (so a dock/Unifying reconnect keeps bindings).
+        """
+        if dkey in self.per_device:
+            return [dkey]
+        live = _split_key(dkey)
+        if not live:
+            return []
+        vid, pid, name = live
+        same_vp, same_model = [], []
+        live_tokens = _name_tokens(name)
+        for k in self.per_device:
+            parts = _split_key(k)
+            if not parts or parts[0] != vid:
+                continue
+            if parts[1] == pid:
+                same_vp.append(k)
+                continue
+            if live_tokens & _MODEL_TOKENS & _name_tokens(parts[2]):
+                same_model.append(k)
+        return same_vp or same_model
+
     def lookup(self, dkey, bkey):
-        b = self.per_device.get(dkey, {}).get(bkey)
-        return b if b is not None else self.any.get(bkey)
+        for key in self.matching_keys(dkey):
+            b = self.per_device.get(key, {}).get(bkey)
+            if b is not None:
+                return b
+        return self.any.get(bkey)
 
     def event_codes_for(self, dkey):
         """EV_KEY codes bound for this device (own bindings plus "*")."""
-        keys = set(self.any) | set(self.per_device.get(dkey, {}))
+        keys = set(self.any)
+        for key in self.matching_keys(dkey):
+            keys |= set(self.per_device.get(key, {}))
         return {c for c in (codes.code(k) for k in keys) if c is not None}
 
     def bindings_for(self, dkey):
         """{evdev code: binding} for this device."""
         out = {}
-        for source in (self.any, self.per_device.get(dkey, {})):
+        sources = [self.any] + [self.per_device[k] for k in self.matching_keys(dkey)
+                                if k in self.per_device]
+        for source in sources:
             for k, b in source.items():
                 c = codes.code(k)
                 if c is not None:
