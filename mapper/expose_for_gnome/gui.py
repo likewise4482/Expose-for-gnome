@@ -498,8 +498,9 @@ class MainWindow(Adw.ApplicationWindow):
             title='What the setup does',
             subtitle='Installs udev rules that let the user of the active local session read '
                      'input devices and create virtual ones (/dev/uinput), and talk to Logitech '
-                     'devices. Effective immediately, no logout. Same access as the "input" '
-                     'group that tools like input-remapper use.')
+                     'devices. Effective immediately, no logout. Programs you run can then '
+                     'read keyboard and mouse input; access ends when you log out or switch '
+                     'user.')
         explain.set_subtitle_lines(0)
         remove = Gtk.Button(label='Remove', valign=Gtk.Align.CENTER)
         remove.connect('clicked', lambda *_: self.run_setup(remove=True))

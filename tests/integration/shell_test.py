@@ -49,15 +49,16 @@ def run(*args, check=True, **kw):
 
 def wait_for(cond, timeout=30, what='condition'):
     end = time.monotonic() + timeout
+    last = None
     while time.monotonic() < end:
         try:
             v = cond()
             if v:
                 return v
-        except Exception:  # noqa: BLE001 - polling
-            pass
+        except Exception as e:  # noqa: BLE001 - polling
+            last = e
         time.sleep(0.25)
-    raise Fail(f'timed out waiting for {what}')
+    raise Fail(f'timed out waiting for {what}' + (f' (last error: {last})' if last else ''))
 
 
 class Harness:
@@ -141,12 +142,21 @@ class Harness:
         for key, value in (('enabled-extensions', str(uuids)),
                            ('disable-user-extensions', 'false'),
                            ('welcome-dialog-last-shown-version', "'999'"),
-                           ('disable-extension-version-validation', 'false')):
+                           ('disable-extension-version-validation',
+                            'true' if self.args.ignore_version else 'false')):
             run('gsettings', 'set', 'org.gnome.shell', key, value)
         run('gsettings', 'set', 'org.gnome.desktop.interface', 'enable-animations', 'false')
         return uuids
 
     def start_shell(self):
+        # Introspect and Screenshot only answer the owner of this name; take it before
+        # the shell can activate xdg-desktop-portal-gnome.
+        res = self.bus.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus',
+                                 'org.freedesktop.DBus', 'RequestName',
+                                 self.GLib.Variant('(su)', (ALLOWED_NAME, 4)), None,
+                                 self.Gio.DBusCallFlags.NONE, 2000, None)[0]
+        if res != 1:
+            raise Fail(f'could not own {ALLOWED_NAME} (RequestName={res})')
         env = dict(os.environ)
         mode = self.args.mode
         if mode in ('x11', 'nested'):
@@ -157,7 +167,9 @@ class Harness:
             os.environ['DISPLAY'] = display
             wait_for(lambda: subprocess.run(['xdpyinfo'], capture_output=True,
                                             env=env).returncode == 0, 15, 'Xvfb')
-        args = ['gnome-shell', '--sm-disable']
+        args = ['gnome-shell']
+        if '--sm-disable' in run('gnome-shell', '--help', check=False):
+            args.append('--sm-disable')
         if mode == 'headless':
             args += ['--headless', '--wayland', '--wayland-display', 'efg-wayland',
                      '--virtual-monitor', '1280x800']
@@ -196,13 +208,9 @@ class Harness:
             self.check(f'other extension {other} running alongside', st.get('state') == 1,
                        f'state={st.get("state")} error={st.get("error", "")!r}')
 
-        self.bus.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
-                           'RequestName', self.GLib.Variant('(su)', (ALLOWED_NAME, 4)), None,
-                           self.Gio.DBusCallFlags.NONE, 2000, None)
-        time.sleep(1)
 
         self.spawn([sys.executable, str(ROOT / 'tests/integration/test_app.py'), '3'],
-                   'test-app.log')
+                   'test-app.log', dict(os.environ, GSK_RENDERER='cairo'))
         wins = wait_for(lambda: [w for w in self.windows() if 'Test window' in w.get('title', '')]
                         if len([w for w in self.windows()
                                 if 'Test window' in w.get('title', '')]) >= 3 else None,
@@ -297,6 +305,8 @@ def main():
                    help='another extension zip to install and enable alongside')
     p.add_argument('--out', default='test-output')
     p.add_argument('--display', type=int, default=97)
+    p.add_argument('--ignore-version', action='store_true',
+                   help="load the extension even if this shell is not in metadata.json")
     args = p.parse_args()
 
     if not os.environ.get('EFG_IN_SESSION'):

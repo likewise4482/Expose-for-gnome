@@ -172,7 +172,9 @@ class AppExposeView {
         Main.layoutManager.uiGroup.add_child(this._root);
 
         this._grab = Main.pushModal(this._root, {actionMode: Shell.ActionMode.POPUP});
-        if ((this._grab.get_seat_state() & Clutter.GrabState.KEYBOARD) === 0) {
+        // Clutter.Grab.get_seat_state() was removed in GNOME 50.
+        if (this._grab.get_seat_state &&
+            (this._grab.get_seat_state() & Clutter.GrabState.KEYBOARD) === 0) {
             Main.popModal(this._grab);
             this._grab = null;
             this._root.destroy();
