@@ -131,6 +131,10 @@ class CodesTest(unittest.TestCase):
         self.assertEqual(codes.x_button(codes.BTN_EXTRA), 9)
         self.assertIsNone(codes.from_x_button(4))
         self.assertEqual(codes.x_keycode(183), 191)
+        self.assertTrue(codes.is_button(codes.BTN_SIDE))
+        self.assertTrue(codes.is_button(codes.BTN_TRIGGER_HAPPY))
+        self.assertFalse(codes.is_button(codes.code('KEY_MACRO1')))
+        self.assertFalse(codes.is_button(codes.code('KEY_F13')))
 
 
 class LearnTest(unittest.TestCase):

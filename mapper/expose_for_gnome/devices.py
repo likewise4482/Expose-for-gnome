@@ -66,7 +66,7 @@ class InputDevice:
             return 'trackball' if 'trackball' in self.name.lower() else 'mouse'
         if self.keys & LETTER_KEYS:
             return 'keyboard'
-        if self.keys and any(k >= codes.BTN_MISC for k in self.keys) and \
+        if self.keys and any(codes.is_button(k) for k in self.keys) and \
                 not any(codes.BTN_JOYSTICK <= k < codes.BTN_DIGI for k in self.keys):
             return 'buttons'
         if self.extra_keys:

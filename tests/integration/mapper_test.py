@@ -310,9 +310,14 @@ def run_uinput(t):
         vd.tap(devs['gaming_kbd'], e.KEY_A)
         t.check('other keys of that device forwarded', forwarded('gaming_kbd', e.KEY_A))
 
-    b = t.snapshot()
-    vd.tap(devs['macro_pad'], e.KEY_MACRO1)
-    t.expect('macro pad KEY_MACRO1 -> app grid', 'ToggleAppGrid', b)
+    if t.args.backend == 'evdev':
+        b = t.snapshot()
+        vd.tap(devs['macro_pad'], e.KEY_MACRO1)
+        t.expect('macro pad KEY_MACRO1 -> app grid', 'ToggleAppGrid', b)
+    else:
+        st = t.daemon('GetStatus')
+        t.check('X11: status explains KEY_MACRO1 (code > 247) needs evdev',
+                any('KEY_MACRO1' in w for w in st.get('warnings', [])), st.get('warnings'))
 
     # learn mode
     def learn_with(action):

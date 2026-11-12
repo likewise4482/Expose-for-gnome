@@ -168,6 +168,7 @@ class X11Backend:
         self._learning = False
         self._learn_swallow = set()
         self.problem = None
+        self.warnings = set()
         self._select_root(learn=False)
 
         try:
@@ -226,7 +227,7 @@ class X11Backend:
 
     def _grab(self, dev, code, bkey):
         mods = XIGrabModifiers(XIAnyModifier, 0)
-        button = codes.x_button(code) if code >= codes.BTN_MISC else None
+        button = codes.x_button(code) if codes.is_button(code) else None
         self._last_error = 0
         if button:
             if not dev.is_pointer:
@@ -237,8 +238,15 @@ class X11Backend:
                                           GrabModeAsync, GrabModeAsync, False, byref(mask),
                                           1, byref(mods))
             kind, detail = 'button', button
-        elif code < codes.BTN_MISC:
+        elif not codes.is_button(code):
             if dev.is_pointer:
+                return
+            if codes.x_keycode(code) > 255:
+                msg = (f'{bkey} cannot be seen on X11 (X keycodes stop at 255); '
+                       'use the evdev backend for it')
+                if msg not in self.warnings:
+                    print(f'{ids.SLUG}: {msg}', flush=True)
+                self.warnings.add(msg)
                 return
             buf = _mask(XI_KeyPress, XI_KeyRelease)
             mask = XIEventMask(dev.xid, len(buf), ctypes.cast(buf, POINTER(c_ubyte)))
@@ -264,6 +272,7 @@ class X11Backend:
     def _regrab(self):
         self._ungrab_all()
         self.problem = None
+        self.warnings = set()
         self.devices = self.query_devices()
         if not self.mapping:
             return
@@ -283,6 +292,7 @@ class X11Backend:
 
     def status(self):
         return {'backend': self.name, 'problem': self.problem,
+                'warnings': sorted(self.warnings),
                 'grabbed': sorted({self.devices[x].name for _, x, _ in self.grabs
                                    if x in self.devices})}
 

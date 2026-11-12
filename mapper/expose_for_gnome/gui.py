@@ -633,6 +633,8 @@ class MainWindow(Adw.ApplicationWindow):
                     text += ' · handling ' + ', '.join(st['grabbed'])
                 if st.get('problem'):
                     text += f'\n⚠ {st["problem"]}'
+                for w in st.get('warnings', []):
+                    text += f'\nⓘ {w}'
                 self.status_row.set_subtitle(text)
             self.daemon.call('GetStatus', None, done)
         else:

@@ -151,6 +151,11 @@ def label(key):
     return key
 
 
+def is_button(code_):
+    """BTN_* ranges; everything else with EV_KEY is a key (incl. KEY_MACRO*, KEY_OK...)."""
+    return BTN_MISC <= code_ < 0x160 or BTN_TRIGGER_HAPPY <= code_ < 0x2e8
+
+
 def is_modifier(code_):
     return name(code_) in MODIFIER_NAMES
 
