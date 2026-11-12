@@ -3,3 +3,4 @@ __pycache__/
 gschemas.compiled
 dist/
 .pytest_cache/
+test-output/

@@ -272,7 +272,7 @@ class X11Backend:
                 bindings = self.mapping.any
             else:
                 bindings = self.mapping.per_device.get(dev.key, {})
-            for bkey in bindings:
+            for bkey in sorted(bindings):
                 code = codes.code(bkey)
                 if code is not None:
                     self._grab(dev, code, bkey)
