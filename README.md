@@ -21,6 +21,12 @@ Works on GNOME Shell 45 to 51, on X11 and Wayland. (GNOME 49 and later are Wayla
 
 Homepage: <https://github.com/likewise4482/Expose-for-gnome>
 
+![Settings home: Press a button, Refresh devices, mapped buttons and device cards](docs/images/settings-home.png)
+
+![App Exposé tiling one application's windows](docs/images/app-expose.png)
+
+Short demo of that session: [docs/images/demo.mp4](docs/images/demo.mp4).
+
 ## Install
 
 Requirements: GNOME Shell 45–51, Python 3 with PyGObject, GTK 4 and libadwaita
@@ -59,14 +65,14 @@ The extension alone is also what is published on extensions.gnome.org.
 
 ## First run and permissions
 
-Open **Expose for GNOME** from the app grid. The *Setup* page shows what is working
-and what is missing:
+Open **Expose for GNOME** from the app grid. The home screen is where you assign
+buttons. **Setup**, in the window menu, shows what is working and what is missing:
 
 - **X11 sessions** need no setup for basic mapping: the mapper grabs buttons through
   the X server, per device or for all devices.
 - **Wayland sessions** (and the evdev backend on X11) need to read input devices and
-  create a virtual one. *Set up permissions* runs a small script with `pkexec` (you
-  are asked for your password once) that installs udev rules.
+  create a virtual one. **Set up** runs a small script with `pkexec` (you are asked
+  for your password once) that installs udev rules.
 - **Logitech firmware buttons** (HID++) need access to Logitech `hidraw` devices; the
   same setup step covers that. Solaar uses the same kind of rule.
 
@@ -83,19 +89,25 @@ Setup page or with `pkexec ~/.local/share/expose-for-gnome/scripts/setup-permiss
 You can also run the script yourself with `sudo` instead of `pkexec`:
 `--input` (input devices and uinput), `--hidraw` (Logitech HID++), `--remove`.
 
-## Mapping buttons
+## Assign a button
 
-On the *Buttons* page:
+On the home screen:
 
-1. Click **Use** next to *Suggested mapping* to map the usual thumb buttons
-   (Back → App Exposé, Forward → Activities overview) on all mice, or
-2. Click **+** (top left) and press the button or key you want to map. The app
-   records which device it came from; choose whether the mapping applies to that
-   device only or to any device, then choose the action. Esc cancels.
+1. Click **Press a button…**, then press the mouse button or key you want to assign.
+   Esc cancels. The app names the device it came from. Choose whether the mapping
+   applies to that device only or to any device, then choose the action.
+2. Or open a device card under **Your devices** and pick a button from the list,
+   without pressing it. Logitech firmware controls (DPI switch and similar) appear
+   there when the mouse supports HID++.
 
-Each device lists the buttons it says it has, so you can also assign without
-pressing. Mapped buttons are swallowed: the application under the pointer no longer
-sees them. Choose **Do nothing (block)** to disable a button entirely.
+**Refresh devices**, under **Press a button…**, rescans mice, keyboards and Logitech
+HID++ controls. Use it after you plug something in, or when a Bluetooth mouse drops
+and reconnects. It reloads the mapper and lists devices again, the same scan as
+reopening the app.
+
+**Mapped buttons** lists what is already assigned. Open a row to change that device.
+Each mapped button is swallowed: the application under the pointer no longer sees it.
+Choose **Do nothing (block)** to disable a button entirely.
 
 Settings live in `~/.config/expose-for-gnome/config.json`. The command-line tool
 `expose-for-gnome-ctl` can trigger every action (handy for custom shortcuts) and
