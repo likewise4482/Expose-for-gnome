@@ -1,0 +1,9 @@
+{
+  "uuid": "expose-for-gnome@likewise4482.github.io",
+  "name": "Expose for GNOME",
+  "description": "Exposé for the focused application: tiles only that app's windows (all workspaces, minimized windows as cards). Toggle it with a keyboard shortcut (default Ctrl+Super+Down) or over D-Bus.\n\nOptional companion app (mouse/keyboard button mapper, CLI): https://github.com/likewise4482/Expose-for-gnome",
+  "shell-version": ["45", "46", "47", "48"],
+  "settings-schema": "org.gnome.shell.extensions.expose-for-gnome",
+  "url": "https://github.com/likewise4482/Expose-for-gnome",
+  "version-name": "1.0.0"
+}

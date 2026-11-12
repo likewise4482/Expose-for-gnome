@@ -1,0 +1,9 @@
+{
+  "uuid": "@EXTENSION_UUID@",
+  "name": "@PRODUCT_NAME@",
+  "description": "Exposé for the focused application: tiles only that app's windows (all workspaces, minimized windows as cards). Toggle it with a keyboard shortcut (default Ctrl+Super+Down) or over D-Bus.\n\nOptional companion app (mouse/keyboard button mapper, CLI): @HOMEPAGE@",
+  "shell-version": [@SHELL_VERSIONS@],
+  "settings-schema": "@SCHEMA_ID@",
+  "url": "@HOMEPAGE@",
+  "version-name": "@VERSION@"
+}

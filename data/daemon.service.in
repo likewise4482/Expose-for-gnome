@@ -1,0 +1,13 @@
+[Unit]
+Description=@PRODUCT_NAME@ button mapper
+Documentation=@HOMEPAGE@
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=@BIN@/@SLUG@-daemon
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

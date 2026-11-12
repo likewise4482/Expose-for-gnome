@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=@PRODUCT_NAME@
+Comment=Map mouse buttons and extra keys to App Exposé, the overview and more
+Exec=@BIN@/@SLUG@
+Icon=@APP_ID@
+Categories=Settings;HardwareSettings;
+Keywords=mouse;button;expose;overview;logitech;keyboard;remap;
+StartupNotify=true
+DBusActivatable=false

@@ -1,0 +1,51 @@
+.efg-backdrop {
+  background-color: rgba(0, 0, 0, 0.72);
+}
+
+.efg-header {
+  spacing: 12px;
+}
+
+.efg-header-label {
+  color: white;
+  font-size: 18pt;
+  font-weight: bold;
+}
+
+.efg-highlight {
+  border: 3px solid rgba(255, 255, 255, 0.9);
+  border-radius: 10px;
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.efg-title {
+  background-color: rgba(0, 0, 0, 0.8);
+  color: white;
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-weight: bold;
+}
+
+.efg-min-strip {
+  spacing: 12px;
+}
+
+.efg-min-card {
+  background-color: rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 8px 14px;
+  color: white;
+}
+
+.efg-min-card:hover {
+  background-color: rgba(255, 255, 255, 0.24);
+}
+
+.efg-min-card-box {
+  spacing: 8px;
+}
+
+.efg-empty {
+  color: white;
+  font-size: 14pt;
+}

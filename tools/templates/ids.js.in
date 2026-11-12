@@ -1,0 +1,6 @@
+// Generated from project.env by tools/sync_ids.py; do not edit.
+export const PRODUCT_NAME = '@PRODUCT_NAME@';
+export const VERSION = '@VERSION@';
+export const HOMEPAGE = '@HOMEPAGE@';
+export const SHELL_BUS_NAME = '@SHELL_BUS_NAME@';
+export const SHELL_OBJECT_PATH = '@SHELL_OBJECT_PATH@';

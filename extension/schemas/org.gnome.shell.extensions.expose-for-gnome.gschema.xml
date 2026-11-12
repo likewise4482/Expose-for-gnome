@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.expose-for-gnome" path="/org/gnome/shell/extensions/expose-for-gnome/">
+    <key name="efg-toggle-app-expose" type="as">
+      <default><![CDATA[['<Control><Super>Down']]]></default>
+      <summary>Keyboard shortcut that toggles App Exposé</summary>
+    </key>
+    <key name="efg-toggle-overview" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Extra keyboard shortcut that toggles the Activities overview</summary>
+    </key>
+    <key name="all-workspaces" type="b">
+      <default>true</default>
+      <summary>Show the app's windows from every workspace</summary>
+      <description>When false, only windows on the current workspace are shown.</description>
+    </key>
+    <key name="include-minimized" type="b">
+      <default>true</default>
+      <summary>Show minimized windows in a strip at the bottom</summary>
+    </key>
+    <key name="dismiss-with-extra-buttons" type="b">
+      <default>true</default>
+      <summary>Close App Exposé / the overview when a side mouse button (8+) is pressed while it is open</summary>
+      <description>Needed on X11 because the shell grabs the pointer while open, so the button mapper cannot see a second press.</description>
+    </key>
+    <key name="animation-time" type="i">
+      <range min="0" max="1000"/>
+      <default>220</default>
+      <summary>Animation duration in milliseconds</summary>
+    </key>
+  </schema>
+</schemalist>
