@@ -277,9 +277,16 @@ class MainWindow(Adw.ApplicationWindow):
         assign.add_css_class('suggested-action')
         assign.set_size_request(220, 0)
         assign.connect('clicked', lambda *_: self.start_learn())
+        refresh = Gtk.Button(halign=Gtk.Align.CENTER)
+        refresh.set_child(Adw.ButtonContent(icon_name='view-refresh-symbolic',
+                                            label='Refresh devices'))
+        refresh.add_css_class('pill')
+        refresh.set_size_request(220, 0)
+        refresh.connect('clicked', self.refresh_devices)
         hero.append(title)
         hero.append(subtitle)
         hero.append(assign)
+        hero.append(refresh)
         self.home_box.append(hero)
 
         mapped = self._mapped_entries()
@@ -302,10 +309,6 @@ class MainWindow(Adw.ApplicationWindow):
         devices_group = Adw.PreferencesGroup(
             title='Your devices',
             description='Mice and keyboards only. Open one to change its buttons.')
-        refresh_btn = Gtk.Button(label='Refresh devices', valign=Gtk.Align.CENTER)
-        refresh_btn.add_css_class('flat')
-        refresh_btn.connect('clicked', self.refresh_devices)
-        devices_group.set_header_suffix(refresh_btn)
         if not phys:
             devices_group.add(Adw.ActionRow(title='No mice or keyboards found'))
         for dev in phys:
