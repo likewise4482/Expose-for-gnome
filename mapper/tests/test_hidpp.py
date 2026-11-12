@@ -119,6 +119,51 @@ class DirectDeviceTest(HidppTestBase):
         finally:
             src.stop()
 
+    def test_list_devices_stable_across_force_rescans(self):
+        # ListHidppDevices / the GUI call _scan(force=True). Dropping a known
+        # connection must not leave its key in `seen`, or every other refresh
+        # returns an empty list.
+        src = hidpp.HidppSource(Runner())
+        src.start()
+        try:
+            names = []
+            for _ in range(4):
+                out = src.list_devices()
+                names.append([d['name'] for d in out['devices']])
+                self.assertEqual(out['errors'], [])
+            self.assertEqual(names, [['MX Vertical']] * 4)
+        finally:
+            src.stop()
+
+
+class NonHidppLogitechTest(unittest.TestCase):
+    def test_broken_pipe_skipped_quietly(self):
+        # StreamCam and similar Logitech non-HID++ nodes reject HID++ writes.
+        orig = (hidpp.HidrawConn, hidpp.find_hidraw)
+
+        class Broken(hidpp.HidrawConn):
+            def __init__(self, path, sw_id=hidpp.SW_ID_DAEMON):
+                self.path = path
+                self.sw_id = sw_id
+                self.fd = -1
+                self.pending = []
+
+            def close(self):
+                self.fd = None
+
+            def request(self, *args, **kwargs):
+                raise BrokenPipeError(32, 'Broken pipe')
+
+        hidpp.HidrawConn = Broken
+        hidpp.find_hidraw = lambda sysfs='/sys': iter(
+            [('/dev/hidraw0', 'Logitech StreamCam', 3, 0x0893)])
+        try:
+            eps, errors = hidpp.discover()
+        finally:
+            hidpp.HidrawConn, hidpp.find_hidraw = orig
+        self.assertEqual(eps, [])
+        self.assertEqual(errors, [])
+
 
 class ReceiverTest(HidppTestBase):
     nodes = {'/dev/hidraw5': {1: FakeDevice('MX Master 3', GESTURE_MOUSE),

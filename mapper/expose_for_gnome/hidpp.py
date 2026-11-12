@@ -206,6 +206,9 @@ def probe(conn, hid_name='', timeout=0.5):
     try:
         if direct.ping(timeout)[0] >= 2:
             return [direct]
+    except OSError:
+        # Non-HID++ Logitech nodes (e.g. a StreamCam) reject the write with EPIPE/EINVAL.
+        return []
     except (HidppError, TimeoutError):
         pass
     found = []
@@ -214,6 +217,8 @@ def probe(conn, hid_name='', timeout=0.5):
         try:
             if ep.ping(timeout)[0] >= 2:
                 found.append(ep)
+        except OSError:
+            return found
         except (HidppError, TimeoutError):
             continue
     return found
@@ -229,17 +234,24 @@ def discover(sw_id=SW_ID_TOOL, sysfs='/sys', with_controls=True):
             errors.append({'path': path, 'name': hid_name, 'error': e.strerror or str(e),
                            'permission': isinstance(e, PermissionError)})
             continue
-        for ep in probe(conn, hid_name):
-            ep.read_name()
-            if ep.key in seen:
-                continue
-            seen.add(ep.key)
-            if with_controls:
-                try:
+        try:
+            eps = probe(conn, hid_name)
+            kept = []
+            for ep in eps:
+                ep.read_name()
+                if ep.key in seen:
+                    continue
+                seen.add(ep.key)
+                if with_controls:
                     ep.read_controls()
-                except (HidppError, TimeoutError) as e:
-                    errors.append({'path': path, 'name': ep.name, 'error': str(e)})
-            endpoints.append(ep)
+                kept.append(ep)
+                endpoints.append(ep)
+        except (OSError, HidppError, TimeoutError) as e:
+            errors.append({'path': path, 'name': hid_name, 'error': str(e)})
+            conn.close()
+            continue
+        if not kept:
+            conn.close()
     return endpoints, errors
 
 
@@ -328,6 +340,11 @@ class HidppSource(threading.Thread):
             if path in self.conns and not force:
                 continue
             if path in self.conns:
+                # Dropping the old connection removes its endpoints; clear those keys
+                # from seen so a force-rescan can re-add them (ListHidppDevices / GUI).
+                for ep in self.endpoints:
+                    if ep.conn is self.conns[path]:
+                        seen.discard(ep.key)
                 self._drop(path)
             try:
                 conn = HidrawConn(path)
