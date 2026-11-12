@@ -243,8 +243,10 @@ def run_uinput(t):
         t.check('uinput clones exist for grabbed devices',
                 {'mouse_a', 'mouse_b', 'gaming_kbd', 'macro_pad'} <= set(clones),
                 sorted(clones))
-        unmapped_clone = 'mouse_plain' in clones
-        t.check('unmapped mouse is not grabbed', not unmapped_clone)
+        t.check('plain mouse grabbed only because of the any-device binding', 'mouse_plain' in clones)
+        grabbed = t.daemon('GetStatus').get('grabbed', [])
+        t.check('devices without bound buttons are not grabbed',
+                not any('AT Translated' in g or 'Power Button' in g for g in grabbed), grabbed)
 
     def drain(name):
         dev = clones.get(name)
