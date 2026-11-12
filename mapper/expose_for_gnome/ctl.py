@@ -5,7 +5,7 @@ import sys
 
 from gi.repository import Gio, GLib
 
-from . import actions, devices, ids
+from . import actions, devices, hidpp, ids
 
 VERBS = {
     'app-expose': 'ToggleAppExpose', 'expose': 'ToggleAppExpose',
@@ -24,6 +24,21 @@ def daemon_call(bus, method, args=None, timeout=5000):
     return json.loads(out[0]) if out else None
 
 
+def print_devices(args):
+    devs = [d.to_dict() for d in devices.list_devices(include_all=args.all)]
+    if args.json:
+        print(json.dumps(devs, indent=2))
+        return 0
+    for d in devs:
+        print(f'{d["path"]}  {d["name"]}  [{d["kind"]}, {d["bus"]}, '
+              f'{d["vendor"]}:{d["product"]}]\n    key: {d["key"]}')
+        if d['mouse_buttons']:
+            print('    buttons: ' + ' '.join(d['mouse_buttons']))
+        if d['extra_keys']:
+            print('    extra keys: ' + ' '.join(d['extra_keys'][:30]))
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog=f'{ids.SLUG}-ctl', description=ids.PRODUCT_NAME)
     p.add_argument('verb', choices=sorted(VERBS) + ['status', 'devices', 'hidpp', 'learn'],
@@ -33,22 +48,12 @@ def main(argv=None):
     p.add_argument('--all', action='store_true', help='devices: include every input device')
     p.add_argument('--json', action='store_true', help='machine readable output')
     args = p.parse_args(argv)
-    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     try:
+        if args.verb == 'devices':
+            return print_devices(args)
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         if args.verb in VERBS:
             actions.call_shell(VERBS[args.verb], bus)
-            return 0
-        if args.verb == 'devices':
-            devs = [d.to_dict() for d in devices.list_devices(include_all=args.all)]
-            if args.json:
-                print(json.dumps(devs, indent=2))
-            for d in [] if args.json else devs:
-                print(f'{d["path"]}  {d["name"]}  [{d["kind"]}, {d["bus"]}, '
-                      f'{d["vendor"]}:{d["product"]}]\n    key: {d["key"]}')
-                if d['mouse_buttons']:
-                    print('    buttons: ' + ' '.join(d['mouse_buttons']))
-                if d['extra_keys']:
-                    print('    extra keys: ' + ' '.join(d['extra_keys'][:30]))
             return 0
         if args.verb == 'status':
             out = {}
@@ -69,7 +74,13 @@ def main(argv=None):
             print(json.dumps(out, indent=2))
             return 0
         if args.verb == 'hidpp':
-            print(json.dumps(daemon_call(bus, 'ListHidppDevices', timeout=30000), indent=2))
+            try:
+                out = daemon_call(bus, 'ListHidppDevices', timeout=30000)
+            except GLib.Error:
+                # Service not running: scan directly (read-only, nothing is diverted).
+                eps, errors = hidpp.discover()
+                out = {'devices': [ep.to_dict() for ep in eps], 'errors': errors}
+            print(json.dumps(out, indent=2))
             return 0
         if args.verb == 'learn':
             print('Press a button or key (Esc cancels)…', file=sys.stderr)
