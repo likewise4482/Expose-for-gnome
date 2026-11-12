@@ -302,6 +302,10 @@ class MainWindow(Adw.ApplicationWindow):
         devices_group = Adw.PreferencesGroup(
             title='Your devices',
             description='Mice and keyboards only. Open one to change its buttons.')
+        refresh_btn = Gtk.Button(label='Refresh devices', valign=Gtk.Align.CENTER)
+        refresh_btn.add_css_class('flat')
+        refresh_btn.connect('clicked', self.refresh_devices)
+        devices_group.set_header_suffix(refresh_btn)
         if not phys:
             devices_group.add(Adw.ActionRow(title='No mice or keyboards found'))
         for dev in phys:
@@ -523,6 +527,49 @@ class MainWindow(Adw.ApplicationWindow):
             self.hidpp = payload if payload else {'devices': [], 'errors': [{'error': err}]}
             self.refresh_home()
         self.daemon.call('ListHidppDevices', None, done, timeout=30000)
+
+    def refresh_devices(self, *_):
+        """Rescan mice/keyboards and Logitech HID++ (same effect as reopening the app)."""
+        self.ensure_daemon()
+        self.cfg = config.load()
+        if self.daemon.running:
+            # Re-apply grabs against the current X11/evdev device set, then force
+            # a HID++ enumeration so firmware controls reappear after Bluetooth drops.
+            self.daemon.call('Reload')
+        was_on_device = bool(self.nav.find_page('device'))
+        previous = None
+        if was_on_device and self._device_page:
+            previous = self._device_page.get_title()
+
+        def finish(payload=None, err=None):
+            if payload is not None or err is not None:
+                self.hidpp = payload if payload else {
+                    'devices': [], 'errors': [{'error': err or 'scan failed'}]}
+            elif not self.daemon.running:
+                self.hidpp, self.hidpp_error = None, 'start the mapper on the Setup page'
+            if was_on_device:
+                self.nav.pop_to_tag('home')
+            self.refresh_home()
+            if previous:
+                for phys in devices.list_physical_devices():
+                    if phys.display == previous:
+                        self.open_device(phys)
+                        break
+            n = len(devices.list_physical_devices())
+            hid_n = len((self.hidpp or {}).get('devices', []))
+            self.toast.add_toast(Adw.Toast(
+                title=f'Refreshed · {n} device{"s" if n != 1 else ""}'
+                      + (f', {hid_n} Logitech' if hid_n else ''),
+                timeout=2))
+
+        if self.daemon.running:
+            # Give Reload a moment to regrab before listing HID++.
+            def scan():
+                self.daemon.call('ListHidppDevices', None, finish, timeout=30000)
+                return False
+            GLib.timeout_add(200, scan)
+        else:
+            finish()
 
     # --- learn mode -------------------------------------------------------------
     def start_learn(self):
