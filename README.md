@@ -87,11 +87,11 @@ You can also run the script yourself with `sudo` instead of `pkexec`:
 
 On the *Buttons* page:
 
-1. Pick **Use suggested** to map the usual thumb buttons (Back → App Exposé,
-   Forward → Activities overview) on all mice, or
-2. Click **Press…** and press the button or key you want to map. The app records
-   which device it came from; choose whether the mapping applies to that device only
-   or to every device, then choose the action. Esc cancels.
+1. Click **Use** next to *Suggested mapping* to map the usual thumb buttons
+   (Back → App Exposé, Forward → Activities overview) on all mice, or
+2. Click **+** (top left) and press the button or key you want to map. The app
+   records which device it came from; choose whether the mapping applies to that
+   device only or to any device, then choose the action. Esc cancels.
 
 Each device lists the buttons it says it has, so you can also assign without
 pressing. Mapped buttons are swallowed: the application under the pointer no longer
