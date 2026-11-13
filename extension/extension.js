@@ -191,8 +191,22 @@ class AppExposeView {
             height: global.stage.height,
             opacity: 0,
         });
+        // Clicks and hovers over a thumbnail can land here instead of on its
+        // Clutter.Clone: picking a clone goes through its source window's paint
+        // volume, which mutter sometimes cannot provide (e.g. when the window
+        // is fully covered by another one). So hit-test the slots ourselves.
+        this._backdrop.connect('motion-event', (_a, event) => {
+            const index = this._itemAt(...event.get_coords());
+            if (index >= 0 && index !== this._selected)
+                this._select(index);
+            return Clutter.EVENT_PROPAGATE;
+        });
         this._backdrop.connect('button-release-event', (_a, event) => {
-            if (event.get_button() <= 3)
+            const button = event.get_button();
+            const index = this._itemAt(...event.get_coords());
+            if (button === 1 && index >= 0)
+                this.close(this._items[index].win);
+            else if (button <= 3)
                 this.close(null);
             return Clutter.EVENT_STOP;
         });
@@ -277,6 +291,13 @@ class AppExposeView {
             this._items.push({win, clone, slot});
         });
 
+        // Stack the clones like the real windows, so overlapping windows don't
+        // swap places while they animate out of (and back into) position.
+        for (const win of global.display.sort_windows_by_stacking(shown)) {
+            const item = this._items.find(it => it.win === win);
+            this._clones.set_child_above_sibling(item.clone, null);
+        }
+
         for (const win of windows) {
             this._windowSignals.push([win, win.connect('unmanaged', () => this.close(null, true))]);
         }
@@ -335,6 +356,11 @@ class AppExposeView {
         strip.set_position(Math.round(work.x + (work.width - stripW) / 2),
             Math.round(work.y + work.height - PADDING - stripH));
         return stripH + PADDING;
+    }
+
+    _itemAt(x, y) {
+        return this._items.findIndex(({slot}) =>
+            x >= slot.x && x < slot.x + slot.w && y >= slot.y && y < slot.y + slot.h);
     }
 
     _select(index) {
@@ -459,6 +485,11 @@ class AppExposeView {
         const duration = immediate ? 0 : this._duration;
         this._highlight?.hide();
         this._title?.hide();
+
+        // The chosen window ends up on top, so its clone must fly back on top.
+        const chosen = this._items.find(it => it.win === win);
+        if (chosen)
+            this._clones.set_child_above_sibling(chosen.clone, null);
 
         const startWs = global.workspace_manager.get_active_workspace();
         for (const {win: w, clone} of this._items) {
